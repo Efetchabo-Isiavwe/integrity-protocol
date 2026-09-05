@@ -1,130 +1,120 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useLayoutEffect, useRef, useState, useCallback } from "react";
 import StartGame, { EventBus } from "./game/main";
-import type { GameScene } from "./game/main";
-import {
-  createInitialState,
-  getNexusAdvisory,
-  getNexusMood,
-  getNexusPrediction,
-  determineEnding,
-  PROLOGUE_LINES,
-  DIALOGUES,
-  type GameState,
-  type DialogueNode,
-  type CrisisEvent,
-  type Ending,
-} from "./game/story";
+import type { Game } from "phaser";
 
-// ─── AUDIO ENGINE (Web Audio API procedural synth) ──────────────────────────
-class AmbientEngine {
-  private ctx: AudioContext | null = null;
-  private droneOsc: OscillatorNode | null = null;
-  private droneGain: GainNode | null = null;
-  private muted = false;
+// ---------------------------------------------------------------------------
+// AFTERLIGHT — Tactical Command Interface (restored)
+// The command dashboard is ALWAYS mounted as the primary operational view.
+// Character dialogues (incl. Mama Ese Okon) render as NON-BLOCKING modal
+// overlays above the dashboard and return to it on dismiss.
+// ---------------------------------------------------------------------------
 
-  init() {
-    if (this.ctx) return;
-    this.ctx = new AudioContext();
-    this.droneGain = this.ctx.createGain();
-    this.droneGain.gain.value = 0.03;
-    this.droneGain.connect(this.ctx.destination);
-    this.droneOsc = this.ctx.createOscillator();
-    this.droneOsc.type = "sine";
-    this.droneOsc.frequency.value = 55;
-    this.droneOsc.connect(this.droneGain);
-    this.droneOsc.start();
-  }
+type Phase = "MENU" | "TACTICAL";
 
-  playClick() {
-    if (!this.ctx || this.muted) return;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.type = "square";
-    osc.frequency.value = 800;
-    gain.gain.setValueAtTime(0.05, this.ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.08);
-    osc.connect(gain).connect(this.ctx.destination);
-    osc.start();
-    osc.stop(this.ctx.currentTime + 0.08);
-  }
-
-  playNexusTone() {
-    if (!this.ctx || this.muted) return;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(440, this.ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(880, this.ctx.currentTime + 0.3);
-    gain.gain.setValueAtTime(0.06, this.ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.4);
-    osc.connect(gain).connect(this.ctx.destination);
-    osc.start();
-    osc.stop(this.ctx.currentTime + 0.4);
-  }
-
-  playAlert() {
-    if (!this.ctx || this.muted) return;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.type = "sawtooth";
-    osc.frequency.value = 220;
-    gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.6);
-    osc.connect(gain).connect(this.ctx.destination);
-    osc.start();
-    osc.stop(this.ctx.currentTime + 0.6);
-  }
-
-  playSuccess() {
-    if (!this.ctx || this.muted) return;
-    [523, 659, 784].forEach((freq, i) => {
-      const osc = this.ctx!.createOscillator();
-      const gain = this.ctx!.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.05, this.ctx!.currentTime + i * 0.12);
-      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx!.currentTime + i * 0.12 + 0.3);
-      osc.connect(gain).connect(this.ctx!.destination);
-      osc.start(this.ctx!.currentTime + i * 0.12);
-      osc.stop(this.ctx!.currentTime + i * 0.12 + 0.3);
-    });
-  }
-
-  setDroneIntensity(level: number) {
-    if (this.droneGain) {
-      this.droneGain.gain.value = 0.02 + level * 0.04;
-    }
-    if (this.droneOsc) {
-      this.droneOsc.frequency.value = 55 + level * 30;
-    }
-  }
-
-  toggleMute() {
-    this.muted = !this.muted;
-    if (this.droneGain) this.droneGain.gain.value = this.muted ? 0 : 0.03;
-    return this.muted;
-  }
-
-  destroy() {
-    if (this.droneOsc) { this.droneOsc.stop(); this.droneOsc = null; }
-    if (this.ctx) { this.ctx.close(); this.ctx = null; }
-  }
+interface Dialogue {
+  id: string;
+  speaker: string;
+  role: string;
+  lines: string[];
 }
 
-const audio = new AmbientEngine();
+interface LogEntry {
+  time: string;
+  text: string;
+  kind: "intel" | "action" | "crisis" | "system";
+}
 
-// ─── PHASER BRIDGE ──────────────────────────────────────────────────────────
-function PhaserBridge({ onSceneReady }: { onSceneReady: (scene: GameScene) => void }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const gameRef = useRef<Phaser.Game | null>(null);
+const DIALOGUES: Record<string, Dialogue> = {
+  "mama-ese": {
+    id: "mama-ese",
+    speaker: "MAMA ESE OKON",
+    role: "Community Elder — Cross River Sector",
+    lines: [
+      "Commander. You summoned me to review my people's records, so I will speak plainly.",
+      "The Nexus grid logged my clinic's power draw as ANOMALOUS. That is our vaccine cold-chain. You flagged it to save a generator nobody asked you to protect.",
+      "I did not come here to beg. I came to remind you: every line in your audit is somebody's mother. Review the file again — and this time, read it.",
+    ],
+  },
+  "nexus-telemetry": {
+    id: "nexus-telemetry",
+    speaker: "NEXUS-7",
+    role: "Grid Intelligence — Autonomous Advisory",
+    lines: [
+      "Commander, CASE 01 telemetry reconstructed. The Okon clinic draw was within tolerance for 46 of 48 hours.",
+      "The anomaly window coincides with the Sector Relay brownout — my sensors attributed the relay's deficit to the clinic. A plausible error. Not an honest one.",
+      "Recommendation: reinstate clinic priority tier. Confidence 94.2%. The remaining 5.8% is where careers end.",
+    ],
+  },
+  "evidence-files": {
+    id: "evidence-files",
+    speaker: "ARCHIVIST VOSS",
+    role: "Records & Evidence Custody",
+    lines: [
+      "The sealed folder is thinner than the briefing claims. Two load logs, one relay fault ticket, and a signature page someone back-dated.",
+      "I copied everything before the original audit was 'finalised'. The copy is in your hands now, Commander.",
+      "If you open this case, close it on the evidence — not on the timeline the press prefers.",
+    ],
+  },
+  "personnel-audit": {
+    id: "personnel-audit",
+    speaker: "DIRECTOR KAINE",
+    role: "Grid Operations — Personnel Oversight",
+    lines: [
+      "Your interrogation of the night-shift operators is noted, Commander. They followed protocol. The protocol was wrong.",
+      "Scapegoats are efficient. They are also, in a public trust economy, expensive. Choose your next statement with that arithmetic in mind.",
+      "The Board reviews CASE 01 at the 48-hour mark. After that, the file belongs to the city — not to us.",
+    ],
+  },
+  "crisis-log": {
+    id: "crisis-log",
+    speaker: "OPS DESK",
+    role: "Crisis Event Monitor",
+    lines: [
+      "Three live incidents on the board: relay cascade in Sector 4, press inquiry at City Hall, and a cold-chain alarm repeat at the Okon clinic.",
+      "Each hour of delay costs measurable trust. The dashboard numbers do not lie, even when the briefings do.",
+    ],
+  },
+};
 
-  useEffect(() => {
-    if (!containerRef.current) return;
+const fmt = (h: number) => `${Math.floor(h)}h`;
+
+export default function App() {
+  const gameRef = useRef<Game | null>(null);
+  const [phase, setPhase] = useState<Phase>("MENU");
+  const [dialogue, setDialogue] = useState<Dialogue | null>(null);
+  const [lineIndex, setLineIndex] = useState(0);
+
+  // Resource dashboard — 6 tracked metrics
+  const [power, setPower] = useState(72);
+  const [comms, setComms] = useState(64);
+  const [budget, setBudget] = useState(48);
+  const [staff, setStaff] = useState(55);
+  const [hoursLeft, setHoursLeft] = useState(48);
+  const [trust, setTrust] = useState(41);
+
+  const [log, setLog] = useState<LogEntry[]>([
+    { time: "T-48", text: "CASE 01 opened. Audit authority granted by interim directive.", kind: "system" },
+    { time: "T-47", text: "Nexus-7 telemetry sync complete. 3 discrepancies flagged.", kind: "intel" },
+  ]);
+
+  // Nexus mood derived from resource pressure (plan: useEffect ticker → Phaser)
+  const mood = hoursLeft <= 8 || trust < 30 ? "pressured"
+    : trust < 45 || power < 40 ? "suspicious"
+    : trust >= 65 ? "intrigued"
+    : "calm";
+
+  useLayoutEffect(() => {
+    if (phase !== "TACTICAL") return;
+    EventBus.emit("nexus-mood-change", mood);
+  }, [mood, phase]);
+
+  const addLog = useCallback((text: string, kind: LogEntry["kind"]) => {
+    setLog((prev) => [{ time: `T-${Math.max(0, hoursLeft)}`, text, kind }, ...prev].slice(0, 40));
+  }, [hoursLeft]);
+
+  useLayoutEffect(() => {
     gameRef.current = StartGame("game-container");
-    const handleReady = (scene: GameScene) => onSceneReady(scene);
-    EventBus.on("current-scene-ready", handleReady);
     return () => {
-      EventBus.removeListener("current-scene-ready", handleReady);
       if (gameRef.current) {
         gameRef.current.destroy(true);
         gameRef.current = null;
@@ -132,936 +122,228 @@ function PhaserBridge({ onSceneReady }: { onSceneReady: (scene: GameScene) => vo
     };
   }, []);
 
-  return <div id="game-container" ref={containerRef} />;
-}
-
-// ─── CINEMATIC PORTRAIT CANVAS ──────────────────────────────────────────────
-function CinematicPortrait({ isSpeaking, mood }: { isSpeaking: boolean; mood: string }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const frameRef = useRef(0);
-  const blinkRef = useRef({ nextBlink: 120, isBlinking: false, blinkFrame: 0 });
-  const breathRef = useRef(0);
-  const lipRef = useRef(0);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    let animId: number;
-    const draw = () => {
-      frameRef.current++;
-      const f = frameRef.current;
-      const W = canvas.width;
-      const H = canvas.height;
-
-      // Breathing cycle
-      breathRef.current = Math.sin(f * 0.02) * 2;
-      const breath = breathRef.current;
-
-      // Blink logic
-      const blink = blinkRef.current;
-      blink.nextBlink--;
-      if (blink.nextBlink <= 0 && !blink.isBlinking) {
-        blink.isBlinking = true;
-        blink.blinkFrame = 0;
-      }
-      if (blink.isBlinking) {
-        blink.blinkFrame++;
-        if (blink.blinkFrame > 8) {
-          blink.isBlinking = false;
-          blink.nextBlink = 100 + Math.random() * 150;
+  // Tactical clock: every 12s of real time burns 1 hour of the 48h mandate.
+  useLayoutEffect(() => {
+    if (phase !== "TACTICAL") return;
+    const t = window.setInterval(() => {
+      setHoursLeft((h) => {
+        if (h <= 1) {
+          window.clearInterval(t);
+          return 0;
         }
-      }
+        return h - 1;
+      });
+    }, 12000);
+    return () => window.clearInterval(t);
+  }, [phase]);
 
-      // Lip sync (mouth openness oscillation when speaking)
-      if (isSpeaking) {
-        lipRef.current = Math.abs(Math.sin(f * 0.25)) * 0.7 + Math.sin(f * 0.4) * 0.3;
-      } else {
-        lipRef.current *= 0.85;
-      }
+  const beginCase = () => {
+    setPhase("TACTICAL");
+    addLog("Command dashboard online. All six resource feeds nominal.", "system");
+    EventBus.emit("tactical-start");
+  };
 
-      // Micro head sway
-      const headSway = Math.sin(f * 0.008) * 1.5;
-      const headTilt = Math.sin(f * 0.012) * 0.5;
+  const openDialogue = (key: string, actionLog?: string) => {
+    const d = DIALOGUES[key];
+    if (!d) return;
+    setDialogue(d);
+    setLineIndex(0);
+    if (actionLog) addLog(actionLog, key === "crisis-log" ? "crisis" : "action");
+  };
 
-      ctx.clearRect(0, 0, W, H);
-
-      // Background gradient (cinematic vignette)
-      const bgGrad = ctx.createRadialGradient(W / 2, H * 0.4, 0, W / 2, H * 0.4, W * 0.7);
-      bgGrad.addColorStop(0, "#1a1020");
-      bgGrad.addColorStop(1, "#05060a");
-      ctx.fillStyle = bgGrad;
-      ctx.fillRect(0, 0, W, H);
-
-      const cx = W / 2 + headSway;
-      const cy = H * 0.38 + breath;
-
-      // Shoulders / body (gele wrapper visible at neckline)
-      ctx.save();
-      ctx.translate(cx, cy);
-
-      // Body/shoulders
-      ctx.beginPath();
-      ctx.ellipse(0, 95, 75, 45, 0, Math.PI, 0, true);
-      ctx.fillStyle = "#2d1b4e";
-      ctx.fill();
-
-      // Neck
-      ctx.beginPath();
-      ctx.ellipse(0, 55, 18, 22, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "#8B6914";
-      ctx.fill();
-
-      // Head (oval)
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 38 + headTilt, 48, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "#9B7420";
-      ctx.fill();
-
-      // Gele headwrap (traditional Nigerian head tie - purple/indigo)
-      ctx.beginPath();
-      ctx.moveTo(-42, -15);
-      ctx.quadraticCurveTo(-45, -55, -20, -65);
-      ctx.quadraticCurveTo(5, -78, 30, -62);
-      ctx.quadraticCurveTo(48, -50, 44, -15);
-      ctx.quadraticCurveTo(42, -25, 35, -30);
-      ctx.quadraticCurveTo(15, -45, -10, -42);
-      ctx.quadraticCurveTo(-30, -38, -38, -20);
-      ctx.closePath();
-      ctx.fillStyle = "#6b21a8";
-      ctx.fill();
-      ctx.strokeStyle = "#9333ea";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Gele fold detail
-      ctx.beginPath();
-      ctx.moveTo(-15, -60);
-      ctx.quadraticCurveTo(0, -70, 15, -58);
-      ctx.strokeStyle = "#a855f7";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Gele top knot
-      ctx.beginPath();
-      ctx.ellipse(5, -68, 15, 8, -0.2, 0, Math.PI * 2);
-      ctx.fillStyle = "#7c3aed";
-      ctx.fill();
-
-      // Eyes
-      const eyeY = -5;
-      const blinkAmount = blink.isBlinking ? Math.sin(blink.blinkFrame / 8 * Math.PI) : 0;
-      const eyeOpenness = 1 - blinkAmount;
-
-      // Left eye
-      ctx.beginPath();
-      ctx.ellipse(-14, eyeY, 7, 5 * eyeOpenness, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "#f5f0e8";
-      ctx.fill();
-      if (eyeOpenness > 0.3) {
-        ctx.beginPath();
-        ctx.arc(-14, eyeY, 3, 0, Math.PI * 2);
-        ctx.fillStyle = "#1a0a00";
-        ctx.fill();
-        // Pupil highlight
-        ctx.beginPath();
-        ctx.arc(-13, eyeY - 1, 1, 0, Math.PI * 2);
-        ctx.fillStyle = "#ffffff";
-        ctx.fill();
-      }
-
-      // Right eye
-      ctx.beginPath();
-      ctx.ellipse(14, eyeY, 7, 5 * eyeOpenness, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "#f5f0e8";
-      ctx.fill();
-      if (eyeOpenness > 0.3) {
-        ctx.beginPath();
-        ctx.arc(14, eyeY, 3, 0, Math.PI * 2);
-        ctx.fillStyle = "#1a0a00";
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(15, eyeY - 1, 1, 0, Math.PI * 2);
-        ctx.fillStyle = "#ffffff";
-        ctx.fill();
-      }
-
-      // Eyebrows (expressive)
-      const browRaise = mood === "stern" ? -2 : mood === "warm" ? 1 : 0;
-      ctx.beginPath();
-      ctx.moveTo(-22, eyeY - 9 + browRaise);
-      ctx.quadraticCurveTo(-14, eyeY - 12 + browRaise, -7, eyeY - 9 + browRaise);
-      ctx.strokeStyle = "#3d2000";
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(7, eyeY - 9 + browRaise);
-      ctx.quadraticCurveTo(14, eyeY - 12 + browRaise, 22, eyeY - 9 + browRaise);
-      ctx.strokeStyle = "#3d2000";
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
-
-      // Nose
-      ctx.beginPath();
-      ctx.moveTo(0, -2);
-      ctx.quadraticCurveTo(-4, 12, -6, 15);
-      ctx.quadraticCurveTo(0, 18, 6, 15);
-      ctx.quadraticCurveTo(4, 12, 0, -2);
-      ctx.fillStyle = "#8a6518";
-      ctx.fill();
-
-      // Mouth with lip sync
-      const mouthOpen = lipRef.current * 8;
-      const mouthY = 26;
-
-      // Lips
-      ctx.beginPath();
-      ctx.moveTo(-12, mouthY);
-      ctx.quadraticCurveTo(-6, mouthY - 3, 0, mouthY - 2);
-      ctx.quadraticCurveTo(6, mouthY - 3, 12, mouthY);
-      // Lower lip
-      ctx.quadraticCurveTo(6, mouthY + 4 + mouthOpen, 0, mouthY + 5 + mouthOpen);
-      ctx.quadraticCurveTo(-6, mouthY + 4 + mouthOpen, -12, mouthY);
-      ctx.fillStyle = "#8b3a3a";
-      ctx.fill();
-
-      // Mouth interior when open
-      if (mouthOpen > 2) {
-        ctx.beginPath();
-        ctx.ellipse(0, mouthY + 2, 8, mouthOpen * 0.5, 0, 0, Math.PI * 2);
-        ctx.fillStyle = "#2d0a0a";
-        ctx.fill();
-      }
-
-      // Smile lines (age/wisdom)
-      ctx.beginPath();
-      ctx.moveTo(-20, 10);
-      ctx.quadraticCurveTo(-18, 20, -14, mouthY - 2);
-      ctx.strokeStyle = "#7a5a10";
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(20, 10);
-      ctx.quadraticCurveTo(18, 20, 14, mouthY - 2);
-      ctx.strokeStyle = "#7a5a10";
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-
-      // Earrings (gold hoops)
-      ctx.beginPath();
-      ctx.arc(-38, 10, 6, 0, Math.PI * 2);
-      ctx.strokeStyle = "#ffd700";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(38, 10, 6, 0, Math.PI * 2);
-      ctx.strokeStyle = "#ffd700";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Necklace (coral beads)
-      ctx.beginPath();
-      ctx.ellipse(0, 72, 30, 12, 0, 0, Math.PI);
-      ctx.strokeStyle = "#ff6b35";
-      ctx.lineWidth = 4;
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(0, 76, 26, 10, 0, 0, Math.PI);
-      ctx.strokeStyle = "#ffd700";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      ctx.restore();
-
-      // Cinematic vignette overlay
-      const vignette = ctx.createRadialGradient(W / 2, H / 2, W * 0.25, W / 2, H / 2, W * 0.6);
-      vignette.addColorStop(0, "rgba(0,0,0,0)");
-      vignette.addColorStop(1, "rgba(0,0,0,0.7)");
-      ctx.fillStyle = vignette;
-      ctx.fillRect(0, 0, W, H);
-
-      // Subtle film grain
-      if (f % 3 === 0) {
-        for (let i = 0; i < 50; i++) {
-          const gx = Math.random() * W;
-          const gy = Math.random() * H;
-          ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.02})`;
-          ctx.fillRect(gx, gy, 1, 1);
-        }
-      }
-
-      animId = requestAnimationFrame(draw);
-    };
-
-    animId = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(animId);
-  }, [isSpeaking, mood]);
-
-  return <canvas ref={canvasRef} width={280} height={320} className="cinematic-portrait" />;
-}
-
-// ─── SPEECH ENGINE ──────────────────────────────────────────────────────────
-function useMamaEseSpeech() {
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-
-  const speak = useCallback((text: string) => {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.82;
-    utterance.pitch = 0.7;
-    utterance.volume = 0.9;
-
-    // Try to find a deep female voice
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(v =>
-      v.name.includes("Female") || v.name.includes("female") ||
-      v.lang.startsWith("en-GB") || v.lang.startsWith("en-NG")
-    );
-    if (preferred) utterance.voice = preferred;
-
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
-
-    utteranceRef.current = utterance;
-    window.speechSynthesis.speak(utterance);
-  }, []);
-
-  const stop = useCallback(() => {
-    window.speechSynthesis?.cancel();
-    setIsSpeaking(false);
-  }, []);
-
-  return { speak, stop, isSpeaking };
-}
-
-// ─── CINEMATIC DIALOGUE OVERLAY ─────────────────────────────────────────────
-function CinematicDialogueOverlay({
-  node,
-  charName,
-  onSelectOption,
-  onClose,
-}: {
-  node: DialogueNode;
-  charName: string;
-  onSelectOption: (idx: number) => void;
-  onClose: () => void;
-}) {
-  const { speak, stop, isSpeaking } = useMamaEseSpeech();
-  const [displayedText, setDisplayedText] = useState("");
-  const [textComplete, setTextComplete] = useState(false);
-  const typingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Typewriter effect + speech trigger
-  useEffect(() => {
-    setDisplayedText("");
-    setTextComplete(false);
-    let idx = 0;
-    const text = node.text;
-
-    typingRef.current = setInterval(() => {
-      idx++;
-      setDisplayedText(text.slice(0, idx));
-      if (idx >= text.length) {
-        if (typingRef.current) clearInterval(typingRef.current);
-        setTextComplete(true);
-      }
-    }, 28);
-
-    // Start speech after a brief cinematic pause
-    const speechDelay = setTimeout(() => {
-      speak(text);
-    }, 600);
-
-    return () => {
-      if (typingRef.current) clearInterval(typingRef.current);
-      clearTimeout(speechDelay);
-      stop();
-    };
-  }, [node.text]);
-
-  const skipTyping = () => {
-    if (!textComplete) {
-      if (typingRef.current) clearInterval(typingRef.current);
-      setDisplayedText(node.text);
-      setTextComplete(true);
+  const advanceDialogue = () => {
+    if (!dialogue) return;
+    if (lineIndex < dialogue.lines.length - 1) {
+      setLineIndex((i) => i + 1);
+      EventBus.emit("dialogue-blip");
+    } else {
+      closeDialogue();
     }
   };
 
+  const closeDialogue = () => {
+    if (dialogue?.id === "mama-ese") {
+      setTrust((v) => Math.min(100, v + 4));
+      addLog("Okon interview closed. Public trust +4 — candour noted.", "intel");
+    }
+    setDialogue(null);
+    setLineIndex(0);
+  };
+
+  // Investigation triggers from the CASE 01 briefing panel
+  const reinstateClinic = () => {
+    setPower((p) => Math.max(0, p - 6));
+    setTrust((v) => Math.min(100, v + 8));
+    setBudget((b) => Math.max(0, b - 5));
+    addLog("Clinic priority tier reinstated. Power -6, Budget -5, Trust +8.", "action");
+  };
+  const subpoenaRelay = () => {
+    setComms((c) => Math.max(0, c - 8));
+    setStaff((s) => Math.max(0, s - 6));
+    setTrust((v) => Math.min(100, v + 6));
+    EventBus.emit("trigger-crisis", { sector: "relay-4" });
+    EventBus.emit("sector-update", { id: "relay-4", status: "warning", health: 55 });
+    addLog("Relay fault ticket subpoenaed. Comms -8, Staff -6, Trust +6.", "action");
+  };
+  const sealFile = () => {
+    setTrust((v) => Math.max(0, v - 10));
+    EventBus.emit("trigger-crisis", { sector: "city-hall" });
+    addLog("File sealed on Director Kaine's advice. Trust -10. The city noticed.", "crisis");
+  };
+
+  const bar = (v: number) => `${Math.max(0, Math.min(100, v))}%`;
+
   return (
-    <div className="cinematic-overlay" onClick={skipTyping}>
-      <div className="cinematic-backdrop" />
-      <div className="cinematic-container">
-        <div className="cinematic-portrait-frame">
-          <CinematicPortrait isSpeaking={isSpeaking} mood="stern" />
-          <div className="cinematic-name-plate">
-            <span className="cinematic-name">{charName}</span>
-            <span className="cinematic-role">Board Liaison & Strategic Advisor</span>
+    <div id="app-shell">
+      {/* Phaser canvas mount — NEVER removed */}
+      <div id="game-container" />
+
+      {phase === "MENU" && (
+        <div className="al-overlay al-menu">
+          <div className="al-menu-inner">
+            <div className="al-kicker">SECTOR GRID AUTHORITY // NIGHT WATCH</div>
+            <h1 className="al-title">AFTERLIGHT</h1>
+            <p className="al-sub">
+              A tactical command game. You have 48 hours, one contested audit file,
+              and a city that watches every number move.
+            </p>
+            <button className="al-btn al-btn-primary" onClick={beginCase} autoFocus>
+              ENTER COMMAND CENTER
+            </button>
+            <div className="al-menu-foot">CASE 01 — THE REVIEW · Clearance: Provisional</div>
           </div>
         </div>
-        <div className="cinematic-dialogue-panel">
-          <div className="cinematic-subtitle">
-            {displayedText}
-            {!textComplete && <span className="typing-cursor">▌</span>}
-          </div>
-          {textComplete && (
-            <div className="cinematic-options">
-              {node.options.map((opt, i) => (
-                <button
-                  key={i}
-                  className={`cinematic-option ${opt.nexusAction ? `nexus-${opt.nexusAction}` : ""}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    stop();
-                    onSelectOption(i);
-                  }}
-                >
-                  {opt.nexusAction && (
-                    <span className="opt-action-tag">[{opt.nexusAction.toUpperCase()}]</span>
-                  )}
-                  {opt.text}
+      )}
+
+      {phase === "TACTICAL" && (
+        <div className="al-tactical">
+          {/* ---- Resource dashboard: 6 metrics, always visible ---- */}
+          <header className="al-resources" role="status">
+            <Metric label="POWER" value={power} bar={bar(power)} tone="amber" />
+            <Metric label="COMMS" value={comms} bar={bar(comms)} tone="cyan" />
+            <Metric label="BUDGET" value={budget} bar={bar(budget)} tone="green" />
+            <Metric label="PERSONNEL" value={staff} bar={bar(staff)} tone="violet" />
+            <div className="al-metric al-metric-time">
+              <span className="al-metric-label">TIME REMAINING</span>
+              <span className={"al-clock" + (hoursLeft <= 8 ? " al-clock-low" : "")}>{fmt(hoursLeft)}</span>
+            </div>
+            <Metric label="PUBLIC TRUST" value={trust} bar={bar(trust)} tone="rose" />
+          </header>
+
+          {/* ---- Fast-action strip ---- */}
+          <nav className="al-actionstrip" aria-label="Tactical actions">
+            <button onClick={() => openDialogue("evidence-files", "Evidence files pulled from sealed archive.")}>EVIDENCE FILES</button>
+            <button onClick={() => openDialogue("personnel-audit", "Personnel dossiers opened for interrogation.")}>PERSONNEL INTERROGATION</button>
+            <button onClick={() => openDialogue("nexus-telemetry", "Nexus-7 telemetry channel established.")}>NEXUS AI TELEMETRY</button>
+            <button onClick={() => openDialogue("crisis-log", "Crisis board reviewed.")}>CRISIS EVENT LOG</button>
+          </nav>
+
+          <main className="al-columns">
+            {/* ---- CASE 01 briefing panel ---- */}
+            <section className="al-briefing">
+              <h2 className="al-panel-title">CASE 01 — THE REVIEW</h2>
+              <div className="al-brief-block">
+                <h3>Mission Parameters</h3>
+                <p>
+                  Audit the Okon clinic power-anomaly citation before the 48-hour board deadline.
+                  Decide whether the file closes on evidence or on convenience. Every action moves
+                  the six feeds above.
+                </p>
+              </div>
+              <div className="al-brief-block">
+                <h3>Audit Timeline</h3>
+                <ul className="al-timeline">
+                  <li><b>T-48</b> Case opened under interim directive.</li>
+                  <li><b>T-46</b> Nexus-7 flags clinic draw as anomalous.</li>
+                  <li><b>T-31</b> Relay Sector 4 reports brownout — logs partial.</li>
+                  <li><b>T-12</b> Press inquiry filed; Board review scheduled.</li>
+                  <li><b>T-00</b> File becomes public record.</li>
+                </ul>
+              </div>
+              <div className="al-brief-block">
+                <h3>Intelligence Summary</h3>
+                <p>
+                  The anomaly window overlaps a relay brownout. Attribution may be wrong.
+                  Elder Mama Ese Okon disputes the citation; Director Kaine urges a clean seal.
+                  The back-dated signature page is your leverage — or your liability.
+                </p>
+              </div>
+              <div className="al-brief-triggers">
+                <button className="al-btn" onClick={() => openDialogue("mama-ese", "Elder Okon summoned to the interview room.")}>
+                  INTERVIEW MAMA ESE OKON
                 </button>
-              ))}
+                <button className="al-btn" onClick={reinstateClinic}>REINSTATE CLINIC PRIORITY</button>
+                <button className="al-btn" onClick={subpoenaRelay}>SUBPOENA RELAY FAULT TICKET</button>
+                <button className="al-btn al-btn-danger" onClick={sealFile}>SEAL FILE ON KAINA'S ADVICE</button>
+              </div>
+            </section>
+
+            {/* ---- Crisis / event log ---- */}
+            <section className="al-logpane">
+              <h2 className="al-panel-title">OPERATIONS LOG</h2>
+              <ul className="al-loglist">
+                {log.map((e, i) => (
+                  <li key={i} className={`al-log al-log-${e.kind}`}>
+                    <span className="al-log-time">{e.time}</span>
+                    <span>{e.text}</span>
+                  </li>
+                ))}
+              </ul>
+              {hoursLeft === 0 && (
+                <div className="al-verdict">
+                  <h3>THE 48-HOUR MARK</h3>
+                  <p>
+                    The file is now public record. Public Trust stands at {trust}%.
+                    {trust >= 60
+                      ? " The city believes its grid was reviewed honestly. AFTERLIGHT holds."
+                      : trust >= 35
+                      ? " The city is unconvinced either way. The grid endures — barely."
+                      : " The city has stopped believing the dashboard. The lights answer to rumor now."}
+                  </p>
+                  <button className="al-btn al-btn-primary" onClick={() => { EventBus.emit("game-restart"); window.location.reload(); }}>
+                    REOPEN MANDATE
+                  </button>
+                </div>
+              )}
+            </section>
+          </main>
+
+          {/* ---- Non-blocking dialogue modal ---- */}
+          {dialogue && (
+            <div className="al-modal-scrim" onClick={advanceDialogue} role="dialog" aria-modal="true">
+              <div className="al-modal" onClick={(ev) => ev.stopPropagation()}>
+                <div className="al-modal-head">
+                  <span className="al-speaker">{dialogue.speaker}</span>
+                  <span className="al-role">{dialogue.role}</span>
+                  <button className="al-close" aria-label="Return to tactical dashboard" onClick={closeDialogue}>✕</button>
+                </div>
+                <p className="al-line">{dialogue.lines[lineIndex]}</p>
+                <div className="al-modal-foot">
+                  <span className="al-progress">{lineIndex + 1} / {dialogue.lines.length}</span>
+                  <div className="al-modal-actions">
+                    {lineIndex > 0 && (
+                      <button className="al-btn" onClick={() => setLineIndex((i) => Math.max(0, i - 1))}>BACK</button>
+                    )}
+                    <button className="al-btn al-btn-primary" onClick={advanceDialogue} autoFocus>
+                      {lineIndex < dialogue.lines.length - 1 ? "CONTINUE" : "RETURN TO DASHBOARD"}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>
-      </div>
-      <button className="cinematic-close" onClick={(e) => { e.stopPropagation(); stop(); onClose(); }}>✕</button>
-      {isSpeaking && <div className="audio-wave-indicator"><span /><span /><span /></div>}
-    </div>
-  );
-}
-
-// ─── MAIN APP ───────────────────────────────────────────────────────────────
-export default function App() {
-  const [gameState, setGameState] = useState<GameState>(createInitialState);
-  const [scene, setScene] = useState<GameScene | null>(null);
-  const [muted, setMuted] = useState(false);
-  const [prologueIndex, setPrologueIndex] = useState(0);
-  const [activeDialogue, setActiveDialogue] = useState<{ charId: string; node: DialogueNode; history: string[] } | null>(null);
-  const [activeCrisis, setActiveCrisis] = useState<CrisisEvent | null>(null);
-  const [nexusMessage, setNexusMessage] = useState("");
-  const [showEvidence, setShowEvidence] = useState(false);
-  const [showCharacters, setShowCharacters] = useState(false);
-  const [ending, setEnding] = useState<Ending | null>(null);
-  const [notification, setNotification] = useState<string | null>(null);
-
-  // Initialize audio on first interaction
-  const initAudio = useCallback(() => {
-    audio.init();
-  }, []);
-
-  // Nexus advisory ticker
-  useEffect(() => {
-    if (gameState.phase !== "DASHBOARD") return;
-    const interval = setInterval(() => {
-      const msg = getNexusAdvisory(gameState.nexus);
-      setNexusMessage(msg);
-      const prediction = getNexusPrediction(gameState.nexus, gameState.decisions[gameState.decisions.length - 1] || "");
-      if (prediction) {
-        setNexusMessage((prev) => prev + " // " + prediction);
-      }
-      const mood = getNexusMood(gameState.nexus);
-      if (mood !== gameState.nexus.mood) {
-        setGameState((prev) => ({
-          ...prev,
-          nexus: { ...prev.nexus, mood },
-        }));
-        EventBus.emit("nexus-mood-change", mood);
-      }
-    }, 8000);
-    return () => clearInterval(interval);
-  }, [gameState.phase, gameState.nexus, gameState.decisions]);
-
-  // Crisis auto-trigger based on time thresholds
-  useEffect(() => {
-    if (gameState.phase !== "DASHBOARD") return;
-    const unresolvedCrises = gameState.crises.filter((c) => !c.triggered && !c.resolved);
-    if (unresolvedCrises.length === 0) return;
-    const nextCrisis = unresolvedCrises[0];
-    // Trigger crisis when remaining time drops below (48 - timeLimit * 8)
-    const triggerThreshold = 48 - nextCrisis.timeLimit * 8;
-    if (gameState.resources.time <= triggerThreshold) {
-      setGameState((prev) => ({
-        ...prev,
-        crises: prev.crises.map((c) => c.id === nextCrisis.id ? { ...c, triggered: true } : c),
-      }));
-      EventBus.emit("trigger-crisis", { sector: nextCrisis.sector });
-      triggerCrisis(nextCrisis.id);
-    }
-  }, [gameState.resources.time, gameState.phase]);
-
-  const triggerCrisis = (crisisId: string) => {
-    const crisis = gameState.crises.find((c) => c.id === crisisId);
-    if (!crisis || crisis.resolved) return;
-    setActiveCrisis(crisis);
-    audio.playAlert();
-  };
-
-  const resolveCrisis = (optionIndex: number) => {
-    if (!activeCrisis) return;
-    const option = activeCrisis.options[optionIndex];
-    setGameState((prev) => {
-      const newResources = { ...prev.resources };
-      if (option.resourceDelta) {
-        Object.entries(option.resourceDelta).forEach(([key, val]) => {
-          if (key in newResources) {
-            (newResources as Record<string, number>)[key] = Math.max(0, Math.min(100, (newResources as Record<string, number>)[key] + (val as number)));
-          }
-        });
-      }
-      const newNexus = { ...prev.nexus };
-      if (option.nexusAction === "trust") {
-        newNexus.trustLevel = Math.min(100, newNexus.trustLevel + 15);
-        newNexus.dependencyScore = Math.min(100, newNexus.dependencyScore + 12);
-      } else if (option.nexusAction === "verify") {
-        newNexus.verifyCount += 1;
-        newNexus.dependencyScore = Math.max(0, newNexus.dependencyScore - 8);
-      } else if (option.nexusAction === "restrict") {
-        newNexus.restrictCount += 1;
-        newNexus.dependencyScore = Math.max(0, newNexus.dependencyScore - 15);
-        newNexus.trustLevel = Math.max(0, newNexus.trustLevel - 10);
-      }
-      const newCharacters = { ...prev.characters };
-      Object.entries(option.trustDelta).forEach(([id, delta]) => {
-        if (id !== "nexus" && newCharacters[id]) {
-          newCharacters[id] = { ...newCharacters[id], trust: Math.max(0, Math.min(100, newCharacters[id].trust + delta)) };
-        }
-      });
-      return {
-        ...prev,
-        resources: newResources,
-        nexus: newNexus,
-        characters: newCharacters,
-        crises: prev.crises.map((c) => (c.id === activeCrisis.id ? { ...c, resolved: true } : c)),
-        decisions: [...prev.decisions, option.nexusAction || "neutral"],
-      };
-    });
-    EventBus.emit("sector-update", { id: activeCrisis.sector, status: "stable", health: 80 });
-    showNotification(option.outcome);
-    if (option.nexusAction === "trust") audio.playNexusTone();
-    else if (option.nexusAction === "verify") audio.playClick();
-    else audio.playAlert();
-    setActiveCrisis(null);
-    checkGameEnd();
-  };
-
-  const startInvestigation = (evidenceId: string) => {
-    setGameState((prev) => {
-      const evidence = { ...prev.evidence };
-      if (evidence[evidenceId]) {
-        evidence[evidenceId] = { ...evidence[evidenceId], unlocked: true };
-      }
-      return { ...prev, evidence };
-    });
-    audio.playClick();
-    showNotification("Evidence file accessed and added to case record.");
-  };
-
-  const startInterrogation = (charId: string) => {
-    const dialogues = DIALOGUES[charId];
-    if (!dialogues || dialogues.length === 0) return;
-    setActiveDialogue({ charId, node: dialogues[0], history: [] });
-    audio.playClick();
-  };
-
-  const selectDialogueOption = (optionIndex: number) => {
-    if (!activeDialogue) return;
-    const option = activeDialogue.node.options[optionIndex];
-    const newHistory = [...activeDialogue.history, `${activeDialogue.node.text}
-
-> ${option.text}
-
-${option.response}`];
-
-    setGameState((prev) => {
-      const characters = { ...prev.characters };
-      const char = characters[activeDialogue.charId];
-      if (char) {
-        characters[activeDialogue.charId] = {
-          ...char,
-          trust: Math.max(0, Math.min(100, char.trust + option.trustDelta)),
-          unlocked: option.unlocksSecret ? true : char.unlocked,
-        };
-      }
-      const evidence = { ...prev.evidence };
-      if (option.unlocksEvidence && evidence[option.unlocksEvidence]) {
-        evidence[option.unlocksEvidence] = { ...evidence[option.unlocksEvidence], unlocked: true };
-      }
-      const resources = { ...prev.resources };
-      if (option.resourceDelta) {
-        Object.entries(option.resourceDelta).forEach(([key, val]) => {
-          if (key in resources) {
-            (resources as Record<string, number>)[key] = Math.max(0, Math.min(100, (resources as Record<string, number>)[key] + (val as number)));
-          }
-        });
-      }
-      const newNexus = { ...prev.nexus };
-      if (option.nexusAction === "trust") {
-        newNexus.trustLevel = Math.min(100, newNexus.trustLevel + 10);
-        newNexus.dependencyScore = Math.min(100, newNexus.dependencyScore + 8);
-      } else if (option.nexusAction === "verify") {
-        newNexus.verifyCount += 1;
-        newNexus.dependencyScore = Math.max(0, newNexus.dependencyScore - 5);
-      } else if (option.nexusAction === "restrict") {
-        newNexus.restrictCount += 1;
-        newNexus.dependencyScore = Math.max(0, newNexus.dependencyScore - 10);
-      }
-      return { ...prev, characters, evidence, resources, nexus: newNexus, decisions: [...prev.decisions, option.nexusAction || "neutral"] };
-    });
-
-    const dialogues = DIALOGUES[activeDialogue.charId];
-    const currentIdx = dialogues.indexOf(activeDialogue.node);
-    if (currentIdx < dialogues.length - 1) {
-      setActiveDialogue({ charId: activeDialogue.charId, node: dialogues[currentIdx + 1], history: newHistory });
-    } else {
-      showNotification(option.response);
-      setActiveDialogue(null);
-    }
-    checkGameEnd();
-  };
-
-  const checkGameEnd = () => {
-    setTimeout(() => {
-      setGameState((prev) => {
-        const totalResolved = prev.crises.filter((c) => c.resolved).length;
-        const evidenceUnlocked = Object.values(prev.evidence).filter((e) => e.unlocked).length;
-        if (prev.resources.time <= 0 || totalResolved >= 4 || evidenceUnlocked >= 6) {
-          const end = determineEnding(prev);
-          setEnding(end);
-          audio.playSuccess();
-          return { ...prev, phase: "EPILOGUE" };
-        }
-        return prev;
-      });
-    }, 500);
-  };
-
-  const showNotification = (msg: string) => {
-    setNotification(msg);
-    setTimeout(() => setNotification(null), 4000);
-  };
-
-  const startGame = () => {
-    initAudio();
-    setGameState((prev) => ({ ...prev, phase: "PROLOGUE" }));
-    audio.playClick();
-  };
-
-  const advancePrologue = () => {
-    if (prologueIndex < PROLOGUE_LINES.length - 1) {
-      setPrologueIndex((prev) => prev + 1);
-      audio.playClick();
-    } else {
-      setGameState((prev) => ({ ...prev, phase: "DASHBOARD" }));
-      audio.playSuccess();
-    }
-  };
-
-  const restartGame = () => {
-    setGameState(createInitialState());
-    setPrologueIndex(0);
-    setActiveDialogue(null);
-    setActiveCrisis(null);
-    setEnding(null);
-    setShowEvidence(false);
-    setShowCharacters(false);
-    EventBus.emit("game-restart");
-  };
-
-  const toggleMute = () => {
-    setMuted(audio.toggleMute());
-  };
-
-  const isMamaEse = activeDialogue?.charId === "mamaEse";
-
-  return (
-    <div className="app-root" onClick={initAudio}>
-      <PhaserBridge onSceneReady={setScene} />
-
-      {/* HUD Layer */}
-      <div id="hud">
-        <button className="hud-btn mute-btn" onClick={toggleMute}>
-          {muted ? "🔇" : "🔊"}
-        </button>
-      </div>
-
-      {/* Notification Toast */}
-      {notification && (
-        <div className="notification-toast">
-          <span className="notif-icon">◈</span>
-          {notification}
-        </div>
-      )}
-
-      {/* BOOT / MENU PHASE */}
-      {gameState.phase === "BOOT" && (
-        <div className="overlay menu-overlay">
-          <div className="menu-content">
-            <div className="title-block">
-              <h1 className="game-title">AFTERLIGHT</h1>
-              <p className="game-subtitle">Case 01: The Review</p>
-              <div className="title-line" />
-              <p className="game-tagline">A Nigerian Tactical Psychological Thriller</p>
-            </div>
-            <button className="btn-primary" onClick={startGame}>
-              <span className="btn-icon">▶</span> INITIALIZE COMMAND
-            </button>
-            <div className="menu-meta">
-              <span>48-HOUR AUDIT WINDOW</span>
-              <span>•</span>
-              <span>NEXUS AI v4.2.1 ACTIVE</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* PROLOGUE PHASE */}
-      {gameState.phase === "PROLOGUE" && (
-        <div className="overlay prologue-overlay" onClick={advancePrologue}>
-          <div className="prologue-content">
-            <div className="prologue-speaker">
-              {PROLOGUE_LINES[prologueIndex]?.speaker === "SYSTEM" && <span className="sys-tag">SYSTEM</span>}
-              {PROLOGUE_LINES[prologueIndex]?.speaker === "NEXUS" && <span className="nexus-tag">NEXUS AI</span>}
-              {PROLOGUE_LINES[prologueIndex]?.speaker === "Mama Ese" && <span className="char-tag mama">MAMA ESE</span>}
-            </div>
-            <p className="prologue-text">{PROLOGUE_LINES[prologueIndex]?.text}</p>
-            <div className="prologue-progress">
-              {PROLOGUE_LINES.map((_, i) => (
-                <span key={i} className={`prog-dot ${i <= prologueIndex ? "active" : ""}`} />
-              ))}
-            </div>
-            <p className="prologue-hint">Click anywhere to continue...</p>
-          </div>
-        </div>
-      )}
-
-      {/* DASHBOARD PHASE */}
-      {gameState.phase === "DASHBOARD" && !activeDialogue && !activeCrisis && (
-        <div className="dashboard-layout">
-          {/* Top HUD */}
-          <div className="hud-top">
-            <div className="hud-resources">
-              <ResourceBar label="POWER" value={gameState.resources.power} color="#f59e0b" />
-              <ResourceBar label="COMMS" value={gameState.resources.comms} color="#2dd4bf" />
-              <ResourceBar label="BUDGET" value={gameState.resources.budget} color="#a78bfa" />
-              <ResourceBar label="STAFF" value={gameState.resources.personnel} color="#22c55e" />
-              <ResourceBar label="TRUST" value={gameState.resources.publicTrust} color="#fb923c" />
-            </div>
-            <div className="hud-time">
-              <span className="time-label">TIME REMAINING</span>
-              <span className="time-value">{gameState.resources.time}h</span>
-            </div>
-          </div>
-
-          {/* Nexus Advisory Panel */}
-          <div className={`nexus-panel mood-${gameState.nexus.mood}`}>
-            <div className="nexus-header">
-              <span className="nexus-dot" />
-              <span>NEXUS ADVISORY</span>
-              <span className="nexus-level">LVL {gameState.nexus.advisoryLevel}</span>
-            </div>
-            <p className="nexus-message">{nexusMessage || "Awaiting operational parameters..."}</p>
-            <div className="nexus-stats">
-              <span>TRUST: {gameState.nexus.trustLevel}%</span>
-              <span>DEP: {gameState.nexus.dependencyScore}%</span>
-              <span>VERIFY: {gameState.nexus.verifyCount}</span>
-              <span>RESTRICT: {gameState.nexus.restrictCount}</span>
-            </div>
-          </div>
-
-          {/* Action buttons */}
-          <div className="hud-actions">
-            <button className="btn-action" onClick={() => setShowEvidence(true)}>
-              ◈ EVIDENCE FILES
-            </button>
-            <button className="btn-action" onClick={() => setShowCharacters(true)}>
-              ◉ PERSONNEL
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* EVIDENCE OVERLAY */}
-      {showEvidence && (
-        <div className="overlay evidence-overlay">
-          <div className="evidence-panel">
-            <div className="panel-header">
-              <h2>CASE EVIDENCE</h2>
-              <button className="btn-close" onClick={() => setShowEvidence(false)}>✕</button>
-            </div>
-            <div className="evidence-grid">
-              {Object.values(gameState.evidence).map((ev) => (
-                <div key={ev.id} className={`evidence-card ${ev.unlocked ? "unlocked" : "locked"}`}>
-                  <h3>{ev.unlocked ? ev.title : "CLASSIFIED"}</h3>
-                  {ev.unlocked ? (
-                    <>
-                      <p>{ev.description}</p>
-                      <span className="credibility">Credibility: {ev.credibility}%</span>
-                      <span className="source">Source: {ev.source}</span>
-                    </>
-                  ) : (
-                    <p className="locked-text">Requires investigation to unlock.</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CHARACTERS OVERLAY */}
-      {showCharacters && (
-        <div className="overlay characters-overlay">
-          <div className="characters-panel">
-            <div className="panel-header">
-              <h2>PERSONNEL DOSSIER</h2>
-              <button className="btn-close" onClick={() => setShowCharacters(false)}>✕</button>
-            </div>
-            <div className="characters-grid">
-              {Object.values(gameState.characters).map((char) => (
-                <div key={char.id} className="character-card">
-                  <div className="char-header">
-                    <span className="char-name" style={{ color: char.color }}>{char.name}</span>
-                    <span className="char-role">{char.role}</span>
-                  </div>
-                  <div className="char-meta">
-                    <span>{char.age}</span>
-                    <span>{char.ethnicity}</span>
-                    <span>{char.region}</span>
-                  </div>
-                  <div className="char-traits">
-                    {char.traits.map((t) => <span key={t} className="trait-tag">{t}</span>)}
-                  </div>
-                  <div className="char-trust">
-                    <span>TRUST</span>
-                    <div className="trust-bar"><div className="trust-fill" style={{ width: `${char.trust}%`, background: char.color }} /></div>
-                    <span>{char.trust}%</span>
-                  </div>
-                  <button className="btn-interrogate" onClick={() => { setShowCharacters(false); startInterrogation(char.id); }}>
-                    INTERROGATE
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CINEMATIC DIALOGUE OVERLAY (Mama Ese) */}
-      {activeDialogue && isMamaEse && (
-        <CinematicDialogueOverlay
-          node={activeDialogue.node}
-          charName={gameState.characters[activeDialogue.charId]?.name || "Mama Ese Okon"}
-          onSelectOption={selectDialogueOption}
-          onClose={() => setActiveDialogue(null)}
-        />
-      )}
-
-      {/* STANDARD INTERROGATION OVERLAY (other characters) */}
-      {activeDialogue && !isMamaEse && (
-        <div className="overlay interrogation-overlay">
-          <div className="interrogation-panel">
-            <div className="interrogation-header">
-              <span className="int-title">INTERROGATION — {gameState.characters[activeDialogue.charId]?.name.toUpperCase()}</span>
-              <button className="btn-close" onClick={() => setActiveDialogue(null)}>✕</button>
-            </div>
-            <div className="dialogue-history">
-              {activeDialogue.history.map((h, i) => (
-                <div key={i} className="history-entry">{h}</div>
-              ))}
-            </div>
-            <div className="dialogue-current">
-              <div className="speaker-tag" style={{ color: gameState.characters[activeDialogue.charId]?.color }}>
-                {activeDialogue.node.speaker}
-              </div>
-              <p className="dialogue-text">{activeDialogue.node.text}</p>
-            </div>
-            <div className="dialogue-options">
-              {activeDialogue.node.options.map((opt, i) => (
-                <button key={i} className={`option-btn ${opt.nexusAction ? `nexus-${opt.nexusAction}` : ""}`} onClick={() => selectDialogueOption(i)}>
-                  {opt.nexusAction && <span className="opt-action-tag">[{opt.nexusAction.toUpperCase()}]</span>}
-                  {opt.text}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CRISIS OVERLAY */}
-      {activeCrisis && (
-        <div className="overlay crisis-overlay">
-          <div className="crisis-panel">
-            <div className="crisis-header">
-              <span className="crisis-icon">⚠</span>
-              <h2>{activeCrisis.title}</h2>
-              <span className="crisis-sector">{activeCrisis.sector}</span>
-            </div>
-            <p className="crisis-desc">{activeCrisis.description}</p>
-            <div className="nexus-crisis-advice">
-              <span className="nexus-label">NEXUS RECOMMENDATION ({activeCrisis.nexusConfidence}% confidence)</span>
-              <p>{activeCrisis.nexusAdvice}</p>
-            </div>
-            <div className="crisis-options">
-              {activeCrisis.options.map((opt, i) => (
-                <button key={i} className={`crisis-btn ${opt.nexusAction ? `crisis-${opt.nexusAction}` : ""}`} onClick={() => resolveCrisis(i)}>
-                  <span className="crisis-action-tag">{opt.nexusAction?.toUpperCase() || "ACT"}</span>
-                  <span className="crisis-opt-text">{opt.text}</span>
-                  <span className="crisis-costs">
-                    {opt.resourceDelta && Object.entries(opt.resourceDelta).map(([k, v]) => (
-                      <span key={k} className={`cost ${v < 0 ? "negative" : "positive"}`}>{k}: {v > 0 ? "+" : ""}{v}</span>
-                    ))}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* EPILOGUE / ENDING */}
-      {gameState.phase === "EPILOGUE" && ending && (
-        <div className="overlay ending-overlay">
-          <div className="ending-content">
-            <h2 className="ending-title">{ending.title}</h2>
-            <p className="ending-desc">{ending.description}</p>
-            <div className="ending-epilogue">
-              {ending.epilogue.map((line, i) => (
-                <p key={i} className="epilogue-line" style={{ animationDelay: `${i * 0.8}s` }}>{line}</p>
-              ))}
-            </div>
-            <div className="ending-stats">
-              <div className="stat-row"><span>Nexus Dependency</span><span>{gameState.nexus.dependencyScore}%</span></div>
-              <div className="stat-row"><span>Evidence Unlocked</span><span>{Object.values(gameState.evidence).filter((e) => e.unlocked).length}/8</span></div>
-              <div className="stat-row"><span>Crises Resolved</span><span>{gameState.crises.filter((c) => c.resolved).length}/4</span></div>
-              <div className="stat-row"><span>Time Remaining</span><span>{gameState.resources.time}h</span></div>
-            </div>
-            <button className="btn-primary" onClick={restartGame}>RESTART CASE FILE</button>
-          </div>
-        </div>
       )}
     </div>
   );
 }
 
-// ─── RESOURCE BAR COMPONENT ─────────────────────────────────────────────────
-function ResourceBar({ label, value, color }: { label: string; value: number; color: string }) {
+function Metric({ label, value, bar, tone }: { label: string; value: number; bar: string; tone: string }) {
   return (
-    <div className="resource-bar">
-      <span className="res-label">{label}</span>
-      <div className="res-track">
-        <div className="res-fill" style={{ width: `${value}%`, background: color }} />
-      </div>
-      <span className="res-value">{value}%</span>
+    <div className={`al-metric al-tone-${tone}`}>
+      <span className="al-metric-label">{label}</span>
+      <span className="al-metric-value">{value}</span>
+      <span className="al-metric-bar"><i style={{ width: bar }} /></span>
     </div>
   );
 }
