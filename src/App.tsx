@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import StartGame, { EventBus } from "./game/main";
 import type { GameScene } from "./game/main";
 import {
@@ -135,6 +135,411 @@ function PhaserBridge({ onSceneReady }: { onSceneReady: (scene: GameScene) => vo
   return <div id="game-container" ref={containerRef} />;
 }
 
+// ─── CINEMATIC PORTRAIT CANVAS ──────────────────────────────────────────────
+function CinematicPortrait({ isSpeaking, mood }: { isSpeaking: boolean; mood: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const frameRef = useRef(0);
+  const blinkRef = useRef({ nextBlink: 120, isBlinking: false, blinkFrame: 0 });
+  const breathRef = useRef(0);
+  const lipRef = useRef(0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let animId: number;
+    const draw = () => {
+      frameRef.current++;
+      const f = frameRef.current;
+      const W = canvas.width;
+      const H = canvas.height;
+
+      // Breathing cycle
+      breathRef.current = Math.sin(f * 0.02) * 2;
+      const breath = breathRef.current;
+
+      // Blink logic
+      const blink = blinkRef.current;
+      blink.nextBlink--;
+      if (blink.nextBlink <= 0 && !blink.isBlinking) {
+        blink.isBlinking = true;
+        blink.blinkFrame = 0;
+      }
+      if (blink.isBlinking) {
+        blink.blinkFrame++;
+        if (blink.blinkFrame > 8) {
+          blink.isBlinking = false;
+          blink.nextBlink = 100 + Math.random() * 150;
+        }
+      }
+
+      // Lip sync (mouth openness oscillation when speaking)
+      if (isSpeaking) {
+        lipRef.current = Math.abs(Math.sin(f * 0.25)) * 0.7 + Math.sin(f * 0.4) * 0.3;
+      } else {
+        lipRef.current *= 0.85;
+      }
+
+      // Micro head sway
+      const headSway = Math.sin(f * 0.008) * 1.5;
+      const headTilt = Math.sin(f * 0.012) * 0.5;
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Background gradient (cinematic vignette)
+      const bgGrad = ctx.createRadialGradient(W / 2, H * 0.4, 0, W / 2, H * 0.4, W * 0.7);
+      bgGrad.addColorStop(0, "#1a1020");
+      bgGrad.addColorStop(1, "#05060a");
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, W, H);
+
+      const cx = W / 2 + headSway;
+      const cy = H * 0.38 + breath;
+
+      // Shoulders / body (gele wrapper visible at neckline)
+      ctx.save();
+      ctx.translate(cx, cy);
+
+      // Body/shoulders
+      ctx.beginPath();
+      ctx.ellipse(0, 95, 75, 45, 0, Math.PI, 0, true);
+      ctx.fillStyle = "#2d1b4e";
+      ctx.fill();
+
+      // Neck
+      ctx.beginPath();
+      ctx.ellipse(0, 55, 18, 22, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#8B6914";
+      ctx.fill();
+
+      // Head (oval)
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 38 + headTilt, 48, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#9B7420";
+      ctx.fill();
+
+      // Gele headwrap (traditional Nigerian head tie - purple/indigo)
+      ctx.beginPath();
+      ctx.moveTo(-42, -15);
+      ctx.quadraticCurveTo(-45, -55, -20, -65);
+      ctx.quadraticCurveTo(5, -78, 30, -62);
+      ctx.quadraticCurveTo(48, -50, 44, -15);
+      ctx.quadraticCurveTo(42, -25, 35, -30);
+      ctx.quadraticCurveTo(15, -45, -10, -42);
+      ctx.quadraticCurveTo(-30, -38, -38, -20);
+      ctx.closePath();
+      ctx.fillStyle = "#6b21a8";
+      ctx.fill();
+      ctx.strokeStyle = "#9333ea";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Gele fold detail
+      ctx.beginPath();
+      ctx.moveTo(-15, -60);
+      ctx.quadraticCurveTo(0, -70, 15, -58);
+      ctx.strokeStyle = "#a855f7";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Gele top knot
+      ctx.beginPath();
+      ctx.ellipse(5, -68, 15, 8, -0.2, 0, Math.PI * 2);
+      ctx.fillStyle = "#7c3aed";
+      ctx.fill();
+
+      // Eyes
+      const eyeY = -5;
+      const blinkAmount = blink.isBlinking ? Math.sin(blink.blinkFrame / 8 * Math.PI) : 0;
+      const eyeOpenness = 1 - blinkAmount;
+
+      // Left eye
+      ctx.beginPath();
+      ctx.ellipse(-14, eyeY, 7, 5 * eyeOpenness, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#f5f0e8";
+      ctx.fill();
+      if (eyeOpenness > 0.3) {
+        ctx.beginPath();
+        ctx.arc(-14, eyeY, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "#1a0a00";
+        ctx.fill();
+        // Pupil highlight
+        ctx.beginPath();
+        ctx.arc(-13, eyeY - 1, 1, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+      }
+
+      // Right eye
+      ctx.beginPath();
+      ctx.ellipse(14, eyeY, 7, 5 * eyeOpenness, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#f5f0e8";
+      ctx.fill();
+      if (eyeOpenness > 0.3) {
+        ctx.beginPath();
+        ctx.arc(14, eyeY, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "#1a0a00";
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(15, eyeY - 1, 1, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+      }
+
+      // Eyebrows (expressive)
+      const browRaise = mood === "stern" ? -2 : mood === "warm" ? 1 : 0;
+      ctx.beginPath();
+      ctx.moveTo(-22, eyeY - 9 + browRaise);
+      ctx.quadraticCurveTo(-14, eyeY - 12 + browRaise, -7, eyeY - 9 + browRaise);
+      ctx.strokeStyle = "#3d2000";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(7, eyeY - 9 + browRaise);
+      ctx.quadraticCurveTo(14, eyeY - 12 + browRaise, 22, eyeY - 9 + browRaise);
+      ctx.strokeStyle = "#3d2000";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      // Nose
+      ctx.beginPath();
+      ctx.moveTo(0, -2);
+      ctx.quadraticCurveTo(-4, 12, -6, 15);
+      ctx.quadraticCurveTo(0, 18, 6, 15);
+      ctx.quadraticCurveTo(4, 12, 0, -2);
+      ctx.fillStyle = "#8a6518";
+      ctx.fill();
+
+      // Mouth with lip sync
+      const mouthOpen = lipRef.current * 8;
+      const mouthY = 26;
+
+      // Lips
+      ctx.beginPath();
+      ctx.moveTo(-12, mouthY);
+      ctx.quadraticCurveTo(-6, mouthY - 3, 0, mouthY - 2);
+      ctx.quadraticCurveTo(6, mouthY - 3, 12, mouthY);
+      // Lower lip
+      ctx.quadraticCurveTo(6, mouthY + 4 + mouthOpen, 0, mouthY + 5 + mouthOpen);
+      ctx.quadraticCurveTo(-6, mouthY + 4 + mouthOpen, -12, mouthY);
+      ctx.fillStyle = "#8b3a3a";
+      ctx.fill();
+
+      // Mouth interior when open
+      if (mouthOpen > 2) {
+        ctx.beginPath();
+        ctx.ellipse(0, mouthY + 2, 8, mouthOpen * 0.5, 0, 0, Math.PI * 2);
+        ctx.fillStyle = "#2d0a0a";
+        ctx.fill();
+      }
+
+      // Smile lines (age/wisdom)
+      ctx.beginPath();
+      ctx.moveTo(-20, 10);
+      ctx.quadraticCurveTo(-18, 20, -14, mouthY - 2);
+      ctx.strokeStyle = "#7a5a10";
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(20, 10);
+      ctx.quadraticCurveTo(18, 20, 14, mouthY - 2);
+      ctx.strokeStyle = "#7a5a10";
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+
+      // Earrings (gold hoops)
+      ctx.beginPath();
+      ctx.arc(-38, 10, 6, 0, Math.PI * 2);
+      ctx.strokeStyle = "#ffd700";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(38, 10, 6, 0, Math.PI * 2);
+      ctx.strokeStyle = "#ffd700";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Necklace (coral beads)
+      ctx.beginPath();
+      ctx.ellipse(0, 72, 30, 12, 0, 0, Math.PI);
+      ctx.strokeStyle = "#ff6b35";
+      ctx.lineWidth = 4;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(0, 76, 26, 10, 0, 0, Math.PI);
+      ctx.strokeStyle = "#ffd700";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      ctx.restore();
+
+      // Cinematic vignette overlay
+      const vignette = ctx.createRadialGradient(W / 2, H / 2, W * 0.25, W / 2, H / 2, W * 0.6);
+      vignette.addColorStop(0, "rgba(0,0,0,0)");
+      vignette.addColorStop(1, "rgba(0,0,0,0.7)");
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, W, H);
+
+      // Subtle film grain
+      if (f % 3 === 0) {
+        for (let i = 0; i < 50; i++) {
+          const gx = Math.random() * W;
+          const gy = Math.random() * H;
+          ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.02})`;
+          ctx.fillRect(gx, gy, 1, 1);
+        }
+      }
+
+      animId = requestAnimationFrame(draw);
+    };
+
+    animId = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(animId);
+  }, [isSpeaking, mood]);
+
+  return <canvas ref={canvasRef} width={280} height={320} className="cinematic-portrait" />;
+}
+
+// ─── SPEECH ENGINE ──────────────────────────────────────────────────────────
+function useMamaEseSpeech() {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+  const speak = useCallback((text: string) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.82;
+    utterance.pitch = 0.7;
+    utterance.volume = 0.9;
+
+    // Try to find a deep female voice
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v =>
+      v.name.includes("Female") || v.name.includes("female") ||
+      v.lang.startsWith("en-GB") || v.lang.startsWith("en-NG")
+    );
+    if (preferred) utterance.voice = preferred;
+
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+
+    utteranceRef.current = utterance;
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  const stop = useCallback(() => {
+    window.speechSynthesis?.cancel();
+    setIsSpeaking(false);
+  }, []);
+
+  return { speak, stop, isSpeaking };
+}
+
+// ─── CINEMATIC DIALOGUE OVERLAY ─────────────────────────────────────────────
+function CinematicDialogueOverlay({
+  node,
+  charName,
+  onSelectOption,
+  onClose,
+}: {
+  node: DialogueNode;
+  charName: string;
+  onSelectOption: (idx: number) => void;
+  onClose: () => void;
+}) {
+  const { speak, stop, isSpeaking } = useMamaEseSpeech();
+  const [displayedText, setDisplayedText] = useState("");
+  const [textComplete, setTextComplete] = useState(false);
+  const typingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Typewriter effect + speech trigger
+  useEffect(() => {
+    setDisplayedText("");
+    setTextComplete(false);
+    let idx = 0;
+    const text = node.text;
+
+    typingRef.current = setInterval(() => {
+      idx++;
+      setDisplayedText(text.slice(0, idx));
+      if (idx >= text.length) {
+        if (typingRef.current) clearInterval(typingRef.current);
+        setTextComplete(true);
+      }
+    }, 28);
+
+    // Start speech after a brief cinematic pause
+    const speechDelay = setTimeout(() => {
+      speak(text);
+    }, 600);
+
+    return () => {
+      if (typingRef.current) clearInterval(typingRef.current);
+      clearTimeout(speechDelay);
+      stop();
+    };
+  }, [node.text]);
+
+  const skipTyping = () => {
+    if (!textComplete) {
+      if (typingRef.current) clearInterval(typingRef.current);
+      setDisplayedText(node.text);
+      setTextComplete(true);
+    }
+  };
+
+  return (
+    <div className="cinematic-overlay" onClick={skipTyping}>
+      <div className="cinematic-backdrop" />
+      <div className="cinematic-container">
+        <div className="cinematic-portrait-frame">
+          <CinematicPortrait isSpeaking={isSpeaking} mood="stern" />
+          <div className="cinematic-name-plate">
+            <span className="cinematic-name">{charName}</span>
+            <span className="cinematic-role">Board Liaison & Strategic Advisor</span>
+          </div>
+        </div>
+        <div className="cinematic-dialogue-panel">
+          <div className="cinematic-subtitle">
+            {displayedText}
+            {!textComplete && <span className="typing-cursor">▌</span>}
+          </div>
+          {textComplete && (
+            <div className="cinematic-options">
+              {node.options.map((opt, i) => (
+                <button
+                  key={i}
+                  className={`cinematic-option ${opt.nexusAction ? `nexus-${opt.nexusAction}` : ""}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    stop();
+                    onSelectOption(i);
+                  }}
+                >
+                  {opt.nexusAction && (
+                    <span className="opt-action-tag">[{opt.nexusAction.toUpperCase()}]</span>
+                  )}
+                  {opt.text}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <button className="cinematic-close" onClick={(e) => { e.stopPropagation(); stop(); onClose(); }}>✕</button>
+      {isSpeaking && <div className="audio-wave-indicator"><span /><span /><span /></div>}
+    </div>
+  );
+}
+
 // ─── MAIN APP ───────────────────────────────────────────────────────────────
 export default function App() {
   const [gameState, setGameState] = useState<GameState>(createInitialState);
@@ -176,13 +581,20 @@ export default function App() {
     return () => clearInterval(interval);
   }, [gameState.phase, gameState.nexus, gameState.decisions]);
 
-  // Crisis auto-trigger based on time
+  // Crisis auto-trigger based on time thresholds
   useEffect(() => {
     if (gameState.phase !== "DASHBOARD") return;
     const unresolvedCrises = gameState.crises.filter((c) => !c.triggered && !c.resolved);
     if (unresolvedCrises.length === 0) return;
     const nextCrisis = unresolvedCrises[0];
-    if (gameState.resources.time <= (nextCrisis.triggered ? 0 : gameState.resources.time - 8)) {
+    // Trigger crisis when remaining time drops below (48 - timeLimit * 8)
+    const triggerThreshold = 48 - nextCrisis.timeLimit * 8;
+    if (gameState.resources.time <= triggerThreshold) {
+      setGameState((prev) => ({
+        ...prev,
+        crises: prev.crises.map((c) => c.id === nextCrisis.id ? { ...c, triggered: true } : c),
+      }));
+      EventBus.emit("trigger-crisis", { sector: nextCrisis.sector });
       triggerCrisis(nextCrisis.id);
     }
   }, [gameState.resources.time, gameState.phase]);
@@ -190,13 +602,7 @@ export default function App() {
   const triggerCrisis = (crisisId: string) => {
     const crisis = gameState.crises.find((c) => c.id === crisisId);
     if (!crisis || crisis.resolved) return;
-    setGameState((prev) => ({
-      ...prev,
-      crises: prev.crises.map((c) => (c.id === crisisId ? { ...c, triggered: true } : c)),
-    }));
-    setActiveCrisis({ ...crisis, triggered: true });
-    EventBus.emit("trigger-crisis", { sector: crisis.sector });
-    EventBus.emit("sector-update", { id: crisis.sector, status: "critical", health: 25 });
+    setActiveCrisis(crisis);
     audio.playAlert();
   };
 
@@ -298,104 +704,95 @@ ${option.response}`];
           }
         });
       }
-      const nexus = { ...prev.nexus };
+      const newNexus = { ...prev.nexus };
       if (option.nexusAction === "trust") {
-        nexus.trustLevel = Math.min(100, nexus.trustLevel + 15);
-        nexus.dependencyScore = Math.min(100, nexus.dependencyScore + 12);
+        newNexus.trustLevel = Math.min(100, newNexus.trustLevel + 10);
+        newNexus.dependencyScore = Math.min(100, newNexus.dependencyScore + 8);
       } else if (option.nexusAction === "verify") {
-        nexus.verifyCount += 1;
-        nexus.dependencyScore = Math.max(0, nexus.dependencyScore - 8);
+        newNexus.verifyCount += 1;
+        newNexus.dependencyScore = Math.max(0, newNexus.dependencyScore - 5);
       } else if (option.nexusAction === "restrict") {
-        nexus.restrictCount += 1;
-        nexus.dependencyScore = Math.max(0, nexus.dependencyScore - 15);
+        newNexus.restrictCount += 1;
+        newNexus.dependencyScore = Math.max(0, newNexus.dependencyScore - 10);
       }
-      return { ...prev, characters, evidence, resources, nexus, decisions: [...prev.decisions, option.nexusAction || "dialogue"] };
+      return { ...prev, characters, evidence, resources, nexus: newNexus, decisions: [...prev.decisions, option.nexusAction || "neutral"] };
     });
 
-    // Advance dialogue or close
     const dialogues = DIALOGUES[activeDialogue.charId];
     const currentIdx = dialogues.indexOf(activeDialogue.node);
     if (currentIdx < dialogues.length - 1) {
       setActiveDialogue({ charId: activeDialogue.charId, node: dialogues[currentIdx + 1], history: newHistory });
     } else {
+      showNotification(option.response);
       setActiveDialogue(null);
     }
-
-    if (option.nexusAction === "trust") audio.playNexusTone();
-    else audio.playClick();
-  };
-
-  const advancePrologue = () => {
-    audio.init();
-    audio.playClick();
-    if (prologueIndex < PROLOGUE_LINES.length - 1) {
-      setPrologueIndex((p) => p + 1);
-    } else {
-      setGameState((prev) => ({ ...prev, phase: "DASHBOARD" }));
-    }
-  };
-
-  const startGame = () => {
-    audio.init();
-    audio.playClick();
-    setGameState((prev) => ({ ...prev, phase: "PROLOGUE" }));
-    setPrologueIndex(0);
-  };
-
-  const presentToBoard = () => {
-    const resolvedCrises = gameState.crises.filter((c) => c.resolved).length;
-    const unlockedEvidence = Object.values(gameState.evidence).filter((e) => e.unlocked).length;
-    if (resolvedCrises < 2 && unlockedEvidence < 3) {
-      showNotification("Insufficient evidence or unresolved crises. Continue investigating.");
-      return;
-    }
-    const result = determineEnding(gameState);
-    setEnding(result);
-    setGameState((prev) => ({ ...prev, phase: "EPILOGUE" }));
-    audio.playSuccess();
-  };
-
-  const restartGame = () => {
-    setGameState(createInitialState());
-    setEnding(null);
-    setActiveDialogue(null);
-    setActiveCrisis(null);
-    setShowEvidence(false);
-    setShowCharacters(false);
-    setPrologueIndex(0);
-    setNexusMessage("");
-    setNotification(null);
-    EventBus.emit("game-restart");
-    audio.playClick();
+    checkGameEnd();
   };
 
   const checkGameEnd = () => {
-    setGameState((prev) => {
-      if (prev.resources.power < 20 || prev.resources.budget < 10 || prev.resources.time <= 0) {
-        const result = determineEnding(prev);
-        setEnding(result);
-        return { ...prev, phase: "EPILOGUE" };
-      }
-      return prev;
-    });
+    setTimeout(() => {
+      setGameState((prev) => {
+        const totalResolved = prev.crises.filter((c) => c.resolved).length;
+        const evidenceUnlocked = Object.values(prev.evidence).filter((e) => e.unlocked).length;
+        if (prev.resources.time <= 0 || totalResolved >= 4 || evidenceUnlocked >= 6) {
+          const end = determineEnding(prev);
+          setEnding(end);
+          audio.playSuccess();
+          return { ...prev, phase: "EPILOGUE" };
+        }
+        return prev;
+      });
+    }, 500);
   };
 
   const showNotification = (msg: string) => {
     setNotification(msg);
-    setTimeout(() => setNotification(null), 5000);
+    setTimeout(() => setNotification(null), 4000);
+  };
+
+  const startGame = () => {
+    initAudio();
+    setGameState((prev) => ({ ...prev, phase: "PROLOGUE" }));
+    audio.playClick();
+  };
+
+  const advancePrologue = () => {
+    if (prologueIndex < PROLOGUE_LINES.length - 1) {
+      setPrologueIndex((prev) => prev + 1);
+      audio.playClick();
+    } else {
+      setGameState((prev) => ({ ...prev, phase: "DASHBOARD" }));
+      audio.playSuccess();
+    }
+  };
+
+  const restartGame = () => {
+    setGameState(createInitialState());
+    setPrologueIndex(0);
+    setActiveDialogue(null);
+    setActiveCrisis(null);
+    setEnding(null);
+    setShowEvidence(false);
+    setShowCharacters(false);
+    EventBus.emit("game-restart");
   };
 
   const toggleMute = () => {
     setMuted(audio.toggleMute());
   };
 
-  // ─── RENDER ─────────────────────────────────────────────────────────────────
+  const isMamaEse = activeDialogue?.charId === "mamaEse";
+
   return (
     <div className="app-root" onClick={initAudio}>
       <PhaserBridge onSceneReady={setScene} />
 
-      {/* CRT Overlay */}
-      <div className="crt-overlay" />
+      {/* HUD Layer */}
+      <div id="hud">
+        <button className="hud-btn mute-btn" onClick={toggleMute}>
+          {muted ? "🔇" : "🔊"}
+        </button>
+      </div>
 
       {/* Notification Toast */}
       {notification && (
@@ -481,76 +878,38 @@ ${option.response}`];
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="action-bar">
+          {/* Action buttons */}
+          <div className="hud-actions">
             <button className="btn-action" onClick={() => setShowEvidence(true)}>
-              <span>📁</span> EVIDENCE
+              ◈ EVIDENCE FILES
             </button>
             <button className="btn-action" onClick={() => setShowCharacters(true)}>
-              <span>👤</span> PERSONNEL
+              ◉ PERSONNEL
             </button>
-            <button className="btn-action btn-crisis" onClick={() => {
-              const next = gameState.crises.find((c) => !c.triggered && !c.resolved);
-              if (next) triggerCrisis(next.id);
-              else showNotification("All crises resolved. Present findings to the Board.");
-            }}>
-              <span>⚡</span> CRISIS
-            </button>
-            <button className="btn-action btn-present" onClick={presentToBoard}>
-              <span>🏛</span> PRESENT TO BOARD
-            </button>
-            <button className="btn-action btn-mute" onClick={toggleMute}>
-              <span>{muted ? "🔇" : "🔊"}</span> {muted ? "UNMUTE" : "MUTE"}
-            </button>
-          </div>
-
-          {/* Sector Status */}
-          <div className="sector-panel">
-            <h3>SECTOR STATUS</h3>
-            {gameState.crises.map((c) => (
-              <div key={c.id} className={`sector-item ${c.resolved ? "resolved" : c.triggered ? "active" : "pending"}`}>
-                <span className="sector-dot" />
-                <span className="sector-name">{c.sector}</span>
-                <span className="sector-status">{c.resolved ? "RESOLVED" : c.triggered ? "ACTIVE" : "PENDING"}</span>
-              </div>
-            ))}
           </div>
         </div>
       )}
 
-      {/* EVIDENCE PANEL */}
+      {/* EVIDENCE OVERLAY */}
       {showEvidence && (
-        <div className="overlay panel-overlay">
-          <div className="panel">
+        <div className="overlay evidence-overlay">
+          <div className="evidence-panel">
             <div className="panel-header">
-              <h2>EVIDENCE FILES</h2>
+              <h2>CASE EVIDENCE</h2>
               <button className="btn-close" onClick={() => setShowEvidence(false)}>✕</button>
             </div>
             <div className="evidence-grid">
               {Object.values(gameState.evidence).map((ev) => (
                 <div key={ev.id} className={`evidence-card ${ev.unlocked ? "unlocked" : "locked"}`}>
-                  <div className="ev-header">
-                    <span className={`ev-status ${ev.unlocked ? "found" : "sealed"}`}>
-                      {ev.unlocked ? "✓" : "🔒"}
-                    </span>
-                    <h4>{ev.title}</h4>
-                  </div>
+                  <h3>{ev.unlocked ? ev.title : "CLASSIFIED"}</h3>
                   {ev.unlocked ? (
                     <>
-                      <p className="ev-desc">{ev.description}</p>
-                      <div className="ev-meta">
-                        <span>SOURCE: {ev.source}</span>
-                        <span>CREDIBILITY: {ev.credibility}%</span>
-                        {ev.nexusFlag && <span className="nexus-flag">NEXUS FLAGGED</span>}
-                      </div>
+                      <p>{ev.description}</p>
+                      <span className="credibility">Credibility: {ev.credibility}%</span>
+                      <span className="source">Source: {ev.source}</span>
                     </>
                   ) : (
-                    <p className="ev-locked">[ SEALED — Requires investigation ]</p>
-                  )}
-                  {!ev.unlocked && (
-                    <button className="btn-investigate" onClick={() => startInvestigation(ev.id)}>
-                      INVESTIGATE
-                    </button>
+                    <p className="locked-text">Requires investigation to unlock.</p>
                   )}
                 </div>
               ))}
@@ -559,44 +918,34 @@ ${option.response}`];
         </div>
       )}
 
-      {/* CHARACTERS PANEL */}
+      {/* CHARACTERS OVERLAY */}
       {showCharacters && (
-        <div className="overlay panel-overlay">
-          <div className="panel">
+        <div className="overlay characters-overlay">
+          <div className="characters-panel">
             <div className="panel-header">
-              <h2>PERSONNEL DOSSIERS</h2>
+              <h2>PERSONNEL DOSSIER</h2>
               <button className="btn-close" onClick={() => setShowCharacters(false)}>✕</button>
             </div>
             <div className="characters-grid">
               {Object.values(gameState.characters).map((char) => (
-                <div key={char.id} className="character-card" style={{ borderColor: char.color }}>
+                <div key={char.id} className="character-card">
                   <div className="char-header">
-                    <div className="char-avatar" style={{ background: char.color + "22", borderColor: char.color }}>
-                      {char.name[0]}
-                    </div>
-                    <div>
-                      <h4>{char.name}</h4>
-                      <p className="char-role">{char.role}</p>
-                      <p className="char-region">{char.ethnicity} • {char.region}</p>
-                    </div>
+                    <span className="char-name" style={{ color: char.color }}>{char.name}</span>
+                    <span className="char-role">{char.role}</span>
                   </div>
-                  <p className="char-desc">{char.description}</p>
+                  <div className="char-meta">
+                    <span>{char.age}</span>
+                    <span>{char.ethnicity}</span>
+                    <span>{char.region}</span>
+                  </div>
                   <div className="char-traits">
                     {char.traits.map((t) => <span key={t} className="trait-tag">{t}</span>)}
                   </div>
                   <div className="char-trust">
                     <span>TRUST</span>
-                    <div className="trust-bar">
-                      <div className="trust-fill" style={{ width: `${char.trust}%`, background: char.color }} />
-                    </div>
+                    <div className="trust-bar"><div className="trust-fill" style={{ width: `${char.trust}%`, background: char.color }} /></div>
                     <span>{char.trust}%</span>
                   </div>
-                  {char.unlocked && (
-                    <div className="char-secret">
-                      <span className="secret-label">SECRET REVEALED</span>
-                      <p>{char.secret}</p>
-                    </div>
-                  )}
                   <button className="btn-interrogate" onClick={() => { setShowCharacters(false); startInterrogation(char.id); }}>
                     INTERROGATE
                   </button>
@@ -607,8 +956,18 @@ ${option.response}`];
         </div>
       )}
 
-      {/* INTERROGATION OVERLAY */}
-      {activeDialogue && (
+      {/* CINEMATIC DIALOGUE OVERLAY (Mama Ese) */}
+      {activeDialogue && isMamaEse && (
+        <CinematicDialogueOverlay
+          node={activeDialogue.node}
+          charName={gameState.characters[activeDialogue.charId]?.name || "Mama Ese Okon"}
+          onSelectOption={selectDialogueOption}
+          onClose={() => setActiveDialogue(null)}
+        />
+      )}
+
+      {/* STANDARD INTERROGATION OVERLAY (other characters) */}
+      {activeDialogue && !isMamaEse && (
         <div className="overlay interrogation-overlay">
           <div className="interrogation-panel">
             <div className="interrogation-header">
