@@ -196,6 +196,7 @@ export default function App() {
     }));
     setActiveCrisis({ ...crisis, triggered: true });
     EventBus.emit("trigger-crisis", { sector: crisis.sector });
+    EventBus.emit("sector-update", { id: crisis.sector, status: "critical", health: 25 });
     audio.playAlert();
   };
 
@@ -238,6 +239,7 @@ export default function App() {
         decisions: [...prev.decisions, option.nexusAction || "neutral"],
       };
     });
+    EventBus.emit("sector-update", { id: activeCrisis.sector, status: "stable", health: 80 });
     showNotification(option.outcome);
     if (option.nexusAction === "trust") audio.playNexusTone();
     else if (option.nexusAction === "verify") audio.playClick();
